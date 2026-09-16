@@ -253,7 +253,7 @@ def test_prose_result_matches_machine_readable_artifact() -> None:
         "agentIntegrityTree",
         "agentIntegrityPackageLockSha256",
         "agentIntegrityCliBuildSha256",
-        "cageEvidenceTree",
+        "cageEvidenceManifestSha256",
         "generatorVersion",
     ):
         assert provenance_key in artifact["provenance"]
@@ -317,11 +317,14 @@ def test_artifact_provenance_is_complete_and_self_consistent(tmp_path: Path) -> 
     provenance = artifact["provenance"]
     assert provenance["generatorVersion"] == 1
     assert re.fullmatch(r"[0-9a-f]{40}", provenance["cageBase"])
-    assert re.fullmatch(r"[0-9a-f]{40}", provenance["cageEvidenceTree"])
     assert re.fullmatch(r"[0-9a-f]{40}", provenance["agentIntegrityTree"])
     for key in ("agentIntegrityPackageLockSha256", "agentIntegrityCliBuildSha256"):
         assert re.fullmatch(r"[0-9a-f]{64}", provenance[key])
-    assert provenance["cageFinalBinding"] == "generated-artifact-excluded"
+    assert re.fullmatch(r"[0-9a-f]{64}", provenance["cageEvidenceManifestSha256"])
+    assert provenance["cageFinalBinding"] == (
+        "tracked-manifest-excluding:"
+        "tests/artifacts/provider_06_agent_integrity_conformance_result.json"
+    )
 
 
 def test_fixture_tree_is_allowlisted_and_contains_no_private_material() -> None:

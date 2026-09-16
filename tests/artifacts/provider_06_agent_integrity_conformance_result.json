@@ -17,8 +17,8 @@
     "agentIntegrityPackageLockSha256": "2d0f7cc5056eee9f6a742a2ffc7b1cfbafdd6f836ff854ade92aa4c4dda1b73b",
     "agentIntegrityTree": "0dbcb3ed294a1100cf4576a6f25c47b429ad59c5",
     "cageBase": "94e9d717be22bafcf6307efd9434fdb04754ac6a",
-    "cageEvidenceTree": "b3ddd2e4dc8df5f2061385f693d124afde4fe6c3",
-    "cageFinalBinding": "generated-artifact-excluded",
+    "cageEvidenceManifestSha256": "93ddc552224f3d89ec46dd820317922c55e9ab77f2bef88268e64891ec7077a2",
+    "cageFinalBinding": "tracked-manifest-excluding:tests/artifacts/provider_06_agent_integrity_conformance_result.json",
     "generatorVersion": 1
   },
   "requiredScenariosPassed": 7,
