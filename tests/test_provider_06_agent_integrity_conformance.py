@@ -18,8 +18,8 @@ import json
 import multiprocessing
 import os
 import re
-import sys
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -31,8 +31,8 @@ from tests.support.provider_06_agent_integrity_cli import (
     PROTECTED_PATHS,
     copy_fixture_project,
     generate_conformance_artifact,
-    run_bounded_process,
     run_agent_integrity_verify,
+    run_bounded_process,
 )
 
 pytestmark = [pytest.mark.unit, pytest.mark.local]

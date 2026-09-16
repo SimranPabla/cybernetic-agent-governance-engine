@@ -25,9 +25,9 @@ import signal
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Sequence
 
 BASE_COMMIT = "94e9d717be22bafcf6307efd9434fdb04754ac6a"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -311,7 +311,7 @@ def generate_conformance_artifact(output_path: Path | None = None) -> dict[str, 
                 "actual": actual,
                 "passed": actual["exitCode"] == exit_code and actual["status"] == status,
             })
-    agent_tree = _git("rev-parse", f"HEAD:third_party/agent-integrity")
+    agent_tree = _git("rev-parse", "HEAD:third_party/agent-integrity")
     protected = {path: _sha256(REPO_ROOT / path) for path in PROTECTED_PATHS}
     artifact: dict[str, object] = {
         "schemaVersion": 2,
