@@ -151,7 +151,8 @@ def test_branch_diff_introduces_no_domain_plugin_registration() -> None:
     executable_added = "\n".join(
         line
         for path, lines in added_by_path.items()
-        if Path(path).suffix in {".py", ".toml", ".cfg", ".ini"}
+        if not path.startswith("tests/")
+        and Path(path).suffix in {".py", ".toml", ".cfg", ".ini"}
         for line in lines
     )
     assert "GovernanceTierPlugin" not in executable_added
