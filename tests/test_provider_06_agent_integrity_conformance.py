@@ -15,8 +15,12 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
+import os
 import re
+import sys
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -26,6 +30,8 @@ from tests.support.provider_06_agent_integrity_cli import (
     FIXTURE_ROOT,
     PROTECTED_PATHS,
     copy_fixture_project,
+    generate_conformance_artifact,
+    run_bounded_process,
     run_agent_integrity_verify,
 )
 
@@ -239,3 +245,105 @@ def test_prose_result_matches_machine_readable_artifact() -> None:
         assert row["actual"] == f"{scenario['actual']['exitCode']}/{scenario['actual']['status']}"
         assert row["findings"] == (",".join(scenario["actual"]["findingCodes"]) or "-")
         assert row["passed"] == str(scenario["passed"]).lower()
+
+    build_policy = artifact["buildPolicy"]
+    assert f"{build_policy['installCommand']}" in prose
+    assert f"{build_policy['buildCommand']}" in prose
+    for provenance_key in (
+        "agentIntegrityTree",
+        "agentIntegrityPackageLockSha256",
+        "agentIntegrityCliBuildSha256",
+        "cageEvidenceTree",
+        "generatorVersion",
+    ):
+        assert provenance_key in artifact["provenance"]
+
+
+def test_bounded_process_kills_child_at_output_cap(tmp_path: Path) -> None:
+    marker = tmp_path / "survived"
+    script = (
+        "import pathlib,sys,time; "
+        "sys.stdout.buffer.write(b'x'*262144); sys.stdout.flush(); "
+        "time.sleep(2); pathlib.Path(sys.argv[1]).write_text('bad')"
+    )
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="exceeds"):
+        run_bounded_process(
+            [sys.executable, "-c", script, str(marker)],
+            cwd=tmp_path,
+            timeout_seconds=10,
+            output_cap_bytes=4096,
+        )
+    assert time.monotonic() - started < 2
+    time.sleep(0.2)
+    assert not marker.exists()
+
+
+def _lock_contender(lock_path: str, counter_path: str) -> None:
+    from tests.support.provider_06_agent_integrity_cli import cross_process_lock
+
+    with cross_process_lock(Path(lock_path), timeout_seconds=5):
+        path = Path(counter_path)
+        current = int(path.read_text())
+        time.sleep(0.15)
+        path.write_text(str(current + 1))
+
+
+def test_build_lock_serializes_processes(tmp_path: Path) -> None:
+    lock_path = tmp_path / "build.lock"
+    counter_path = tmp_path / "counter"
+    counter_path.write_text("0")
+    processes = [
+        multiprocessing.Process(target=_lock_contender, args=(str(lock_path), str(counter_path)))
+        for _ in range(4)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(10)
+        assert process.exitcode == 0
+    assert counter_path.read_text() == "4"
+
+
+def test_generated_artifact_matches_committed_artifact(tmp_path: Path) -> None:
+    generated = generate_conformance_artifact(tmp_path / "generated.json")
+    committed_path = FIXTURE_ROOT.parents[2] / "artifacts/provider_06_agent_integrity_conformance_result.json"
+    committed = json.loads(committed_path.read_text(encoding="utf-8"))
+    assert generated == committed
+
+
+def test_artifact_provenance_is_complete_and_self_consistent(tmp_path: Path) -> None:
+    artifact = generate_conformance_artifact(tmp_path / "generated.json")
+    provenance = artifact["provenance"]
+    assert provenance["generatorVersion"] == 1
+    assert re.fullmatch(r"[0-9a-f]{40}", provenance["cageBase"])
+    assert re.fullmatch(r"[0-9a-f]{40}", provenance["cageEvidenceTree"])
+    assert re.fullmatch(r"[0-9a-f]{40}", provenance["agentIntegrityTree"])
+    for key in ("agentIntegrityPackageLockSha256", "agentIntegrityCliBuildSha256"):
+        assert re.fullmatch(r"[0-9a-f]{64}", provenance[key])
+    assert provenance["cageFinalBinding"] == "generated-artifact-excluded"
+
+
+def test_fixture_tree_is_allowlisted_and_contains_no_private_material() -> None:
+    allowed = {
+        "docs/source.md",
+        "integrity/decisions.yaml",
+        "integrity/policy.yaml",
+        "integrity/trusted-config.json",
+        "request-blocked.json",
+        "request-pass.json",
+        "request-review.json",
+    }
+    files = {
+        path.relative_to(FIXTURE_ROOT).as_posix()
+        for path in FIXTURE_ROOT.rglob("*")
+        if path.is_file()
+    }
+    assert files == allowed
+    forbidden = re.compile(
+        rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|"
+        rb"(?:pk-lf-|sk-|hf_)[A-Za-z0-9_-]{8,}"
+    )
+    for path in FIXTURE_ROOT.rglob("*"):
+        if path.is_file():
+            assert forbidden.search(path.read_bytes()) is None, path

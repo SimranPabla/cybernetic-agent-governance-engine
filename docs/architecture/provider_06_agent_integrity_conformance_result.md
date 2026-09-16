@@ -27,9 +27,15 @@ The locked vendored CLI was built with:
 
 ```text
 cd third_party/agent-integrity
-npm ci
+npm ci --ignore-scripts
 npm run build
 ```
+
+The machine-readable artifact additionally binds this result to the exact vendored
+Agent Integrity Git tree, `package-lock.json` SHA-256, built CLI SHA-256, CAGE
+evidence tree, generator version, and protected-file SHA-256 values. The artifact
+intentionally excludes its own final branch commit from the tree hash to avoid a
+self-referential digest.
 
 The conformance proof was run with:
 
@@ -101,6 +107,7 @@ This experiment does not:
 - prove production reliability, acceptable operational latency, regulatory or
   legal correctness, commercial validation, or general action integrity.
 
-The vendored clean install reported three npm dependency advisories and an esbuild
-postinstall allow-list warning. They did not change the experiment outcome, but a
-runtime integration must resolve or explicitly accept them before production use.
+Lifecycle scripts were disabled during the vendored clean install. The build itself
+was then invoked explicitly with `npm run build`. The install requires network
+access in a clean checkout. A runtime integration must separately review and accept
+the vendored dependency and build-script trust boundary before production use.
