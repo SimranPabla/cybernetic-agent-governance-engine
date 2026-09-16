@@ -46,7 +46,6 @@ _BUILD_TIMEOUT_SECONDS = 180
 _VERIFY_TIMEOUT_SECONDS = 30
 _GENERATOR_VERSION = 1
 _BUILD_LOCK_PATH = Path(tempfile.gettempdir()) / "cage-provider-06-agent-integrity-build.lock"
-_ARTIFACT_PATH = "tests/artifacts/provider_06_agent_integrity_conformance_result.json"
 
 
 @dataclass(frozen=True)
@@ -89,18 +88,6 @@ def _git(*args: str, cwd: Path = REPO_ROOT) -> str:
     return subprocess.run(
         ["git", *args], cwd=cwd, check=True, capture_output=True, text=True, timeout=30
     ).stdout.strip()
-
-
-def _tracked_manifest_sha256(*, excluded_paths: set[str]) -> str:
-    entries = _git("ls-tree", "-r", "--full-tree", "HEAD").splitlines()
-    manifest: list[str] = []
-    for entry in entries:
-        metadata, path = entry.split("\t", maxsplit=1)
-        if path in excluded_paths:
-            continue
-        mode, object_type, object_id = metadata.split(" ")
-        manifest.append(f"{mode} {object_type} {object_id}\t{path}\n")
-    return hashlib.sha256("".join(manifest).encode("utf-8")).hexdigest()
 
 
 @contextlib.contextmanager
@@ -325,7 +312,6 @@ def generate_conformance_artifact(output_path: Path | None = None) -> dict[str, 
                 "passed": actual["exitCode"] == exit_code and actual["status"] == status,
             })
     agent_tree = _git("rev-parse", f"HEAD:third_party/agent-integrity")
-    cage_manifest = _tracked_manifest_sha256(excluded_paths={_ARTIFACT_PATH})
     protected = {path: _sha256(REPO_ROOT / path) for path in PROTECTED_PATHS}
     artifact: dict[str, object] = {
         "schemaVersion": 2,
@@ -338,8 +324,7 @@ def generate_conformance_artifact(output_path: Path | None = None) -> dict[str, 
         "provenance": {
             "generatorVersion": _GENERATOR_VERSION,
             "cageBase": BASE_COMMIT,
-            "cageEvidenceManifestSha256": cage_manifest,
-            "cageFinalBinding": f"tracked-manifest-excluding:{_ARTIFACT_PATH}",
+            "cageEvidenceBinding": "fixed-base-plus-protected-file-sha256",
             "agentIntegrityTree": agent_tree,
             "agentIntegrityPackageLockSha256": _sha256(AGENT_INTEGRITY_ROOT / "package-lock.json"),
             "agentIntegrityCliBuildSha256": _sha256(CLI_PATH),

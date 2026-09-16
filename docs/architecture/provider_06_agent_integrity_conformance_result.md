@@ -32,10 +32,11 @@ npm run build
 ```
 
 The machine-readable artifact additionally binds this result to the exact vendored
-Agent Integrity Git tree, `package-lock.json` SHA-256, built CLI SHA-256, a CAGE
-tracked-file manifest SHA-256, generator version, and protected-file SHA-256
-values. The manifest intentionally excludes the generated artifact path to avoid
-a self-referential digest while still binding every other tracked file.
+Agent Integrity Git tree, `package-lock.json` SHA-256, built CLI SHA-256, generator
+version, fixed CAGE base, and protected-file SHA-256 values. The artifact does not
+claim to embed its own final branch commit: that would be self-referential. Instead,
+CI executes the committed generator and compares its complete output with the
+committed artifact.
 
 The conformance proof was run with:
 
