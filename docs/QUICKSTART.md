@@ -29,6 +29,7 @@ CAGE_ROUTING_SEAL_SECRET=<random-32-char-string>
 # Domain-neutral defaults — no domain plugin, universal ISO 42001 baseline only
 CAGE_ACTIVE_PLUGINS=""
 CAGE_DEPLOYMENT_REGION=LOCAL
+CAGE_ENV=development
 ```
 
 Generate a routing seal secret:
@@ -43,7 +44,7 @@ docker compose up -d
 ```
 
 This starts:
-- **Gateway** (`localhost:8080`) — Governance enforcement proxy with 8-tier governance pipeline (FTRA pre-pipeline boundary gate + 7 in-pipeline tiers via SymbolicGovernor), and Phase A/B ingress adapters
+- **Gateway** (`localhost:8080`) — Gateway: 8080 (REST Ingress / FastMCP over SSE / In-Process Tier Pipeline)
 - **Governed Application (`app`)** (`localhost:3000`) — Governed application service container
 - **OPA** (`localhost:8181`) — Policy engine with Rego authorization policies
 - **SLM Sidecar** (`localhost:5000`) — Sentence-transformers similarity scoring service
@@ -52,7 +53,10 @@ This starts:
 
 ```bash
 curl http://localhost:8080/health
-# Expected: {"status": "healthy", "governance": "active"}
+# Expected: {"status": "ok", "mode": "mcp-tool-server", "nemo": "active"}
+# Verify the FastMCP over SSE transport is ready
+curl -N http://localhost:8080/mcp/sse
+# Expected: data: {"event": "endpoint", "data": "http://localhost:8080/mcp/messages"}
 ```
 
 ## 4. Run the domain-neutral governance demo
@@ -89,7 +93,7 @@ uv run pytest tests/ -m "local or unit" -n auto --dist loadscope --no-cov -p no:
 ## 7. Confirm the substrate is domain-independent
 
 ```bash
-uv run pytest tests/test_domain_independence.py -v
+uv run pytest tests/test_tier_registry_contract.py -v
 ```
 
 This asserts that both shipped example plugins co-load, that neither required a kernel modification, and that a domain package contains zero Lua scripts and zero KMS imports. If it passes, everything you ran in §1–6 was domain-neutral.
@@ -123,7 +127,7 @@ uv run python examples/chaos_agent_playground.py --scenario A
 | Barrier | `CashBarrier` watching the `safety:current_cash` scalar |
 | Tiers | CBF tier, fiscal pre-reservation tier, consensus tier, causal tier |
 | Critics | Risk Manager, Compliance Officer |
-| Policy | `opa/trade_governance.rego` |
+| Policy | `src/cage_finance/opa/trade_governance.rego` |
 
 ### 8b. Domain Plugin Example: Healthcare
 
@@ -140,8 +144,8 @@ uv run pytest tests/test_healthcare_plugin.py -v
 | Governed actions | `dose_order` and the rest of `HEALTHCARE_GOVERNED_ACTIONS` |
 | Barrier | `SerumConcentrationBarrier` watching a serum-concentration scalar |
 | Tiers | Dose barrier tier, clinical consensus tier |
-| Critics | Clinical reviewer personas from `config/critics.yaml` |
-| Policy | `opa/dosing_governance.rego` |
+| Critics | Clinical reviewer personas from `src/cage_<domain>/config/critics.yaml` |
+| Policy | `src/cage_healthcare/opa/dosing_governance.rego` |
 
 The healthcare package exists specifically to falsify the "it's really a finance product" claim by construction. It names things; it implements no mechanism.
 
@@ -177,7 +181,8 @@ Each posture resolves thresholds from `config/thresholds/<REGION>_BASELINE.json`
 ## Next Steps
 
 - **Deploy to GKE**: See [`infra/QUICK_START.md`](../infra/QUICK_START.md)
-- **Understand the architecture**: See [`docs/architecture/GATEWAY_ARCHITECTURE.md`](architecture/GATEWAY_ARCHITECTURE.md)
+- **Understand Layer 1 kernel architecture**: See [`docs/architecture/GATEWAY_ARCHITECTURE.md`](architecture/GATEWAY_ARCHITECTURE.md)
+- **Understand Layer 4 reference application**: See [`docs/examples/governed-financial-advisor/ARCHITECTURE.md`](examples/governed-financial-advisor/ARCHITECTURE.md)
 - **Configure governance policies**: See [`docs/governance/GOVERNANCE_OVERVIEW.md`](governance/GOVERNANCE_OVERVIEW.md)
 - **Connect an MCP client**: See [`docs/MCP_SETUP.md`](MCP_SETUP.md)
 - **Author a domain plugin**: See [`docs/architecture/EXTENSIBILITY_ARCHITECTURE.md`](architecture/EXTENSIBILITY_ARCHITECTURE.md)

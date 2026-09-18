@@ -7,13 +7,13 @@
 | **Classification**   | INTERNAL                                                                          |
 | **Document Series**  | CAGE Technical Report                                                             |
 | **Status**           | ACTIVE — v3.0.1 stable (GKE deployment verified; 4,148 tests collected / 3,921 passed, 0 failed) |
-| **Reference**        | `src/governed_financial_advisor/graph/`, `src/governed_financial_advisor/agents/` |
+| **Reference**        | `src/governed_financial_advisor/graph/`, `src/governed_financial_advisor/agents/`, [`docs/examples/governed-financial-advisor/ARCHITECTURE.md`](../examples/governed-financial-advisor/ARCHITECTURE.md) |
 
 ---
 
 ## 1. Agent Orchestration Philosophy
 
-> **v2.1.0**: The Governed Financial Advisor (`src/governed_financial_advisor/`) is the primary multi-agent reference implementation. It demonstrates the full CAGE governance stack applied to a realistic financial advisory workflow. The LangGraph harness (`src/gateway/governance/langgraph_harness/`) provides the node-factory pattern used to compose governance checks into the graph. NeMo Guardrails (`src/gateway/governance/nemo/`) enforces CBRN and PII rails as typed LangGraph nodes. OPA policy evaluation (`src/cage_finance/opa/trade_governance.rego` and `config/opa/trade_policy.rego`) enforces role-based trade authorization at Tier 4.
+> **v2.1.0**: The Governed Financial Advisor (`src/governed_financial_advisor/`) is the **Layer 4 reference application** demonstrating the full CAGE governance stack applied to a realistic financial advisory workflow. See [`docs/examples/governed-financial-advisor/ARCHITECTURE.md`](../examples/governed-financial-advisor/ARCHITECTURE.md) for the complete reference application architecture. The LangGraph harness (`src/gateway/governance/langgraph_harness/`) provides the node-factory pattern used to compose governance checks into the graph. NeMo Guardrails (`src/gateway/governance/nemo/`) enforces CBRN and PII rails as typed LangGraph nodes. OPA policy evaluation (`src/cage_finance/opa/trade_governance.rego` and `config/opa/trade_policy.rego`) enforces role-based trade authorization at Tier 4.
 
 The demo applications (e.g., the Governed Financial Advisor) compose their multi-agent pipelines using LangGraph's `StateGraph`, producing a deterministic, fully auditable execution sequence. Every agent carries a single, well-defined responsibility; no agent performs work outside its declared scope. All inter-agent communication occurs through a shared, strongly typed `AgentState` TypedDict defined in the respective application (e.g., `src/governed_financial_advisor/graph/state.py`) — agents read fields they need and write only the fields they own.
 
@@ -241,7 +241,7 @@ Before any step of a proposed `ExecutionPlan` runs, the FTRA gate (`src/gateway/
 
 The FTRA gate runs **per plan, before any step executes** — not once per graph compilation. `FTRAVerdict.CLEAR` (no irreversible terminal reachable) proceeds to the OPA `safety_check` node. `HITL_REQUIRED` (irreversible terminal reachable, Evaluator confidence ≥ 0.70) parks the thread in DeferQueue `db=1` pending human clearance. `BLOCKED` (confidence < 0.70) halts the plan and routes to `explainer`.
 
-> **Removed scaffold:** `src/gateway/governance/ftra_reachability.py` was a separate, unwired `FtraReachabilityGate` scaffold committed in the same commit as this package. It was never called by `SymbolicGovernor` or any production code path — the FTRA gate actually wired into `src/governed_financial_advisor/graph/graph.py` has always been exclusively `ftra/node_factory.py`. The scaffold and its dedicated test module were removed.
+> **Removed scaffold:** `src/gateway/governance/ftra/graph_analyzer.py` was a separate, unwired `FtraReachabilityGate` scaffold committed in the same commit as this package. It was never called by `SymbolicGovernor` or any production code path — the FTRA gate actually wired into `src/governed_financial_advisor/graph/graph.py` has always been exclusively `src/gateway/governance/ftra/node_factory.py`. The scaffold and its dedicated test module were removed.
 
 ### NeMo Guardrails Phase 4.2 Changes
 
@@ -382,7 +382,7 @@ CAGE includes a structured adversarial evaluation harness to validate pipeline r
 | -------------------------- | ----------------------------------------- | ---------------------------------------------------------- |
 | `src/governed_financial_advisor/agents/evaluator/red_agent.py`             | `src/governed_financial_advisor/agents/evaluator/red_agent.py`           | Adversarial test harness targeting the full agent pipeline |
 | `tests/red_team/adversarial_dataset.json` | `tests/red_team/adversarial_dataset.json` | 290+ adversarial payloads across attack categories         |
-| `tests/red_teaming/test_adversarial.py`      | `tests/red_teaming/test_adversarial.py`   | Automated adversarial test suite                           |
+| `tests/red_team/test_adversarial.py`      | `tests/red_team/test_adversarial.py`   | Automated adversarial test suite                           |
 | `scripts/run_agent_benchmark.py`   | `scripts/run_agent_benchmark.py`          | Benchmark runner for batch adversarial evaluation          |
 
 ### Attack Coverage

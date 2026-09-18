@@ -37,7 +37,7 @@ The following capabilities are implemented, tested, and operational in the CAGE 
 
 ### 1.1 The Domain-Agnostic Kernel
 
-The CBF engine ([`safety/cbf_engine.py`](../../src/gateway/governance/safety/cbf_engine.py)) implements a pure mathematical invariant with no domain-specific logic. The barrier function is:
+The CBF engine ([`src/gateway/governance/safety/cbf_engine.py`](../../src/gateway/governance/safety/cbf_engine.py)) implements a pure mathematical invariant with no domain-specific logic. The barrier function is:
 
 ```mermaid
 flowchart TD
@@ -60,7 +60,7 @@ h(x) = cash_balance - min_cash_balance
 where `min_cash_balance = 1000.0` (sourced from `THRESHOLDS.cbf.min_cash_balance` in `config/governance_thresholds.json`).
 ## 3. State Machine & Lifecycle
 
-**v3.0.1:** The deprecated `safety.py` shim was removed. Import `ControlBarrierFunction` directly from [`safety/cbf_engine.py`](../../src/gateway/governance/safety/cbf_engine.py).
+**v3.0.1:** The deprecated `safety.py` shim was removed. Import `ControlBarrierFunction` directly from [`src/gateway/governance/safety/cbf_engine.py`](../../src/gateway/governance/safety/cbf_engine.py).
 The core extensibility mechanic relies on generalizing the Control Barrier Function (CBF) and policy tiers:
 
 The enforcement boundary:
@@ -422,6 +422,78 @@ CAGE_NORMATIVE_API_KEY_SECRET=projects/cage-prod/secrets/normative-provider-api-
 
 When `CAGE_NORMATIVE_PROVIDER=static` (default), the ControlRegistry loads from `config/compliance/` as it does today. No external dependency is introduced unless explicitly configured.
 
+#### 2.5.5 Runtime Adapter Taxonomy ✅ IMPLEMENTED
+
+> **Status:** Implemented in v3.0.1. See [`attestation_aggregator.py`](../../src/gateway/governance/attestation_aggregator.py) and [`execution_actuator.py`](../../src/gateway/governance/execution_actuator.py).
+
+CAGE supports three distinct adapter loading patterns, each optimized for its specific integration boundary and cardinality:
+
+| Pattern | Adapter Type | Environment Variable | Cardinality | Runtime Behavior | Use Case |
+|---------|--------------|---------------------|-------------|------------------|----------|
+| **Multi-Active Composite** | Attestation Providers | `CAGE_ATTESTATION_PROVIDERS` | 0..N | Background polled; results aggregated via consensus | External compliance attestations (CERs, blueprints, warrants) polled from multiple providers and merged into governance envelope |
+| **Multi-Active Routed** | Execution Actuators | `CAGE_ACTIVE_ACTUATORS` | 0..N | Action-claim dispatch; first match wins | Downstream execution gateways registered by capability claim (e.g., `trade.*`, `transfer.*`); registry routes execution clearances to the actuator handling each action pattern |
+| **Single-Active Exclusive** | Normative Provider | `CAGE_NORMATIVE_PROVIDER` | 0..1 | Singleton instance selected per deployment | Single normative baseline engine per instance; exactly one provider supplies legal/regulatory baselines for the deployment region |
+
+##### Multi-Active Composite: Attestation Providers
+
+Attestation providers implement the [`AttestationProvider`](../../src/gateway/governance/attestation_provider.py) protocol and are aggregated by [`AttestationAggregator`](../../src/gateway/governance/attestation_aggregator.py). The aggregator polls all registered providers at a configurable interval (default: 6 hours, matching THR-AUD-002 Lula cadence) and caches results in-memory. Cached attestations are embedded into [`GovernanceEnvelope`](../../src/gateway/governance/governance_envelope.py) instances at build time with zero per-transaction network calls.
+
+**Configuration:**
+
+```bash
+# Comma-separated list of provider names (empty = hermetic dev/CI mode)
+CAGE_ATTESTATION_PROVIDERS=provider_02,provider_05
+
+# Optional: Override default 6-hour poll interval
+CAGE_ATTESTATION_POLL_INTERVAL_S=21600
+```
+
+**Supported providers:** `provider_02` (CER attestations), `provider_05` (AO warrants/blueprints).
+
+**Fail-closed semantics:** If any provider fails during boot-fetch, the aggregator logs a warning and continues with the successfully-fetched subset. Stale attestations are flagged via `_last_fetch_succeeded: bool` signal. The governance envelope includes all available attestations; missing attestations do not block transactions (fail-open on staleness, fail-closed on signature verification).
+
+##### Multi-Active Routed: Execution Actuators
+
+Execution actuators implement the [`ExecutionActuator`](../../src/gateway/governance/seams/actuation.py) protocol and are registered in the [`ActuatorRegistry`](../../src/gateway/governance/execution_actuator.py). Each actuator declares a set of action-claim patterns (e.g., `{"trade.*", "transfer.*"}`) it handles. The registry dispatches [`ExecutionClearance`](../../src/gateway/governance/seams/actuation.py) requests to the first actuator matching the action claim.
+
+**Configuration:**
+
+```bash
+# Comma-separated list of actuator names (empty = no downstream execution)
+CAGE_ACTIVE_ACTUATORS=actuator_01
+```
+
+**Supported actuators:** `actuator_01` (Archytan mTLS execution gateway with quorum signatures).
+
+**Fail-closed semantics:** If no actuator claims an action, `ActuatorRegistry.get_actuator()` returns `None`. The consequence gateway ([`consequence_gateway.py`](../../src/gateway/governance/consequence_gateway.py)) must handle unclaimed actions explicitly (typically by raising `GovernanceError` or logging a warning).
+
+##### Single-Active Exclusive: Normative Provider
+
+Normative providers implement the [`NormativeProvider`](../../src/gateway/governance/normative_provider.py) protocol and supply legal/regulatory baselines for the deployment region. Exactly one normative provider is active per instance; the provider is selected via `CAGE_NORMATIVE_PROVIDER` environment variable.
+
+**Configuration:**
+
+```bash
+# Provider name: "static" (default, load from config/compliance/*.json) or "provider_01"
+CAGE_NORMATIVE_PROVIDER=provider_01
+
+# Provider-specific configuration (example for provider_01)
+CAGE_NORMATIVE_ENDPOINT=https://api.example.com/normative
+CAGE_NORMATIVE_API_KEY_SECRET=projects/cage-prod/secrets/normative-provider-api-key
+```
+
+**Fail-closed semantics:** If the configured normative provider is unreachable during boot-time baseline fetch, the system falls back to cached/static baselines per the four-level fallback chain (§2.5.1). If no baseline is available at any level, the container fails to start with `RuntimeError`.
+
+##### Hermetic Development and CI Mode
+
+All three adapter types default to hermetic mode when their respective environment variables are unset or empty:
+
+- `CAGE_ATTESTATION_PROVIDERS=""` → `AttestationAggregator` returns zero providers; governance envelopes include no external attestations.
+- `CAGE_ACTIVE_ACTUATORS=""` → `ActuatorRegistry` remains empty; consequence gateway handles actions locally or raises errors for unclaimed patterns.
+- `CAGE_NORMATIVE_PROVIDER="static"` → `ControlRegistry` loads baselines from committed `config/compliance/*.json` files only.
+
+This ensures zero external network dependencies during local development and CI test suites, preserving fast, deterministic test execution.
+
 ### 2.6 Vendor-Isolated Integration Architecture ✅ IMPLEMENTED
 
 > **Status:** Implemented in v2.1.0. See `src/integrations/`.
@@ -476,7 +548,7 @@ The `FINANCE_SR26_2_DORA` profile (current `US_FED_BASELINE.json`) serves as the
 | ControlRegistry (3 regions)        | [`constants.py`](../../src/gateway/governance/constants.py) L121-308                  | ✅ Production |
 | 7-Tier SymbolicGovernor            | [`symbolic_governor.py`](../../src/gateway/governance/symbolic_governor.py)            | ✅ Production |
 | Cloud KMS HSM signing              | [`kms_signer.py`](../../src/gateway/governance/kms_signer.py)                         | ✅ Production |
-| Heterogeneous multi-model consensus | [`consensus.py`](../../src/gateway/governance/consensus/engine.py)                           | ✅ Production |
+| Heterogeneous multi-model consensus | [`consensus.py`](../src/gateway/governance/consensus/engine.py)                           | ✅ Production |
 | Fail-closed CBF enforcement        | `CBF_FAIL_OPEN=false` in `.env`                                                          | ✅ Verified   |
 | DoWhy causal gatekeeper            | [`causal_gatekeeper.py`](../../src/gateway/governance/causal/gatekeeper.py)            | ✅ Production |
 | STPA-to-Policy Compiler            | [`stpa_compiler.py`](../../src/gateway/governance/stpa_compiler.py)                    | ✅ Production |
@@ -547,7 +619,7 @@ NeMo Guardrails (`src/gateway/governance/nemo/`) is the neural component of the 
 | [`manager.py`](../../src/gateway/governance/nemo/manager.py) | Lifecycle management; hot-reload endpoint; Phase 4.2 async refactor |
 | [`actions.py`](../../src/gateway/governance/nemo/actions.py) | Gateway-internal NeMo action implementations (OPA check, CBF check, STPA check) |
 | [`server.py`](../../src/gateway/governance/nemo/server.py) | gRPC service exposing NeMo rails to external callers |
-| [`colang/cbrn_rails.co`](../../src/gateway/governance/nemo/colang/cbrn_rails.co) | CBRN keyword rail — NIST AI 600-1 §2.6 **[US_FED only]** |
+| [`src/gateway/governance/nemo/colang/cbrn_rails.co`](../../src/gateway/governance/nemo/colang/cbrn_rails.co) | CBRN keyword rail — NIST AI 600-1 §2.6 **[US_FED only]** |
 
 **Extension pattern**: A new safety rail is added by authoring a Colang 2.x flow file and registering it in `config/rails/config.yml`. The `NeMoNodeFactory` in the LangGraph harness (§4.1) automatically wraps the updated rail set as a typed governance node. No kernel changes are required.
 

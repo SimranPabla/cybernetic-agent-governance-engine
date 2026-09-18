@@ -4,7 +4,7 @@
 > See [`CHANGELOG.md`](../CHANGELOG.md) for the full release notes. This document
 > describes the breaking changes included in this release. Item IDs (`SR-#`,
 > `MR-#`, `CR-#`, `FF-#`, `EV-#`) match
-> ``docs/MAJOR_VERSION_CLEANUP_PLAN.md`` 1:1
+> ``local/plans/remediation/MAJOR_VERSION_CLEANUP_PLAN.md`` 1:1
 > so the two documents can be cross-referenced.
 >
 > **Release Scope:** `AGWEnvelope`/`AGWEnvelopeBuilder` removal, legacy provider
@@ -50,7 +50,7 @@ behavior change in `v3.0.1`.
 
 ## PR A — Domain Pipeline Extraction (Capability-Driven Tier Dispatch)
 
-> **Status:** In progress on branch `refactor/domain-pipeline-extract`.
+> **Status:** Completed / Merged
 > Part of the four-PR domain extraction refactoring sequence (A → B → C → D).
 > This is a **hollowing refactor** — the kernel intentionally loses functionality
 > until PR C restores it as domain plugins.
@@ -140,8 +140,8 @@ accept `tool_name` with a default value.
 
 | Method | Old signature | New signature |
 |---|---|---|
-| `revalidate_post_hitl()` | `async def revalidate_post_hitl(self, action: str, params: dict[str, Any], tool_name: str = "execute_trade") -> dict[str, Any]` | `async def revalidate_post_hitl(self, action: str, params: dict[str, Any]) -> dict[str, Any]` |
-| `pre_check()` | `async def pre_check(self, action: str = "execute_trade", params: dict[str, Any]) -> dict[str, Any]` | `async def pre_check(self, action: str, params: dict[str, Any]) -> dict[str, Any]` |
+| `revalidate_post_hitl()` | `async def revalidate_post_hitl(self, action: str, params: dict[str, Any], tool_name: str = "execute_trade") -> str` | `async def revalidate_post_hitl(self, action: str, params: dict[str, Any]) -> str` |
+| `pre_check()` | `async def pre_check(self, action: str = "execute_trade", params: dict[str, Any]) -> str` | `async def pre_check(self, action: str, params: dict[str, Any]) -> str` |
 
 **Who is affected:** callers relying on the `tool_name` default value.
 
@@ -197,14 +197,14 @@ Per ``plans/domain_extraction_implementation_plan.md``:
 | Module | Replacement | Migration |
 |--------|-------------|-----------|
 | [`src/gateway/governance/generated_stpa_validator.py`](../src/gateway/governance/generated_stpa_validator.py) (`STPAValidator` class) | [`src/gateway/governance/generated_stpa_validator.py`](../src/gateway/governance/generated_stpa_validator.py:38) (`GeneratedSTPAValidator`) | Replace `from src.gateway.governance.stpa_validator import STPAValidator` with `from src.gateway.governance.generated_stpa_validator import GeneratedSTPAValidator`; replace `.validate(action_name, params)` calls with `.validate_generated(action_name, params)`. |
-| [`src/gateway/governance/safety/cbf_engine.py`](../src/gateway/governance/safety/cbf_engine.py) (entire file) | [`src/gateway/governance/text_filter.py`](../src/gateway/governance/text_filter.py) (`ac_keyword_scan`); [`src/gateway/governance/safety/cbf_engine.py`](../src/gateway/governance/safety/cbf_engine.py) (`ControlBarrierFunction`, `safety_filter`) | Replace `from src.gateway.governance.safety import ac_keyword_scan` with `from src.gateway.governance.text_filter import ac_keyword_scan`; replace `from src.gateway.governance.safety import ControlBarrierFunction, safety_filter` with `from src.gateway.governance.cbf import ControlBarrierFunction, safety_filter`. |
+| [`src/gateway/governance/safety/cbf_engine.py`](../src/gateway/governance/safety/cbf_engine.py) (entire file) <br><br>**Correction:** `cbf_engine.py` remains in the kernel at `src/gateway/governance/safety/cbf_engine.py` (1,114 lines). Only financial-specific CBF barrier calculations moved to `cage_finance/tiers/cbf_tier.py`. | [`src/gateway/governance/text_filter.py`](../src/gateway/governance/text_filter.py) (`ac_keyword_scan`); [`src/gateway/governance/safety/cbf_engine.py`](../src/gateway/governance/safety/cbf_engine.py) (`ControlBarrierFunction`, `safety_filter`) | Replace `from src.gateway.governance.safety import ac_keyword_scan` with `from src.gateway.governance.text_filter import ac_keyword_scan`; replace `from src.gateway.governance.safety import ControlBarrierFunction, safety_filter` with `from src.gateway.governance.cbf import ControlBarrierFunction, safety_filter`. |
 | `src/gateway/governance/agw_envelope.py` (entire file — `AGWEnvelope`, `AGWEnvelopeBuilder` backward-compatibility aliases) | [`src/gateway/governance/governance_envelope.py`](../src/gateway/governance/governance_envelope.py) (`GovernanceEnvelope`, `GovernanceEnvelopeBuilder`) | Replace `from src.gateway.governance.agw_envelope import AGWEnvelope` with `from src.gateway.governance.governance_envelope import GovernanceEnvelope`; replace `AGWEnvelopeBuilder` with `GovernanceEnvelopeBuilder` (same module). `tests/test_agw_envelope.py` (the backward-compatibility test suite for these aliases) is also deleted — see [`tests/test_governance_envelope.py`](../tests/test_governance_envelope.py) for the canonical coverage. **(Completed post-tag, `fix/v3-breaking-changes-completion`.)** |
 
 ### Removed Classes/Functions
 
 | Symbol | Module | Replacement | Migration |
 |--------|--------|-------------|-----------|
-| `GovernanceClient` (alias) | [`src/governed_financial_advisor/infrastructure/governance_client.py:323`](../src/governed_financial_advisor/infrastructure/governance_client.py:323) | `StructuredLLMClient` (same module) | Replace `GovernanceClient(...)` with `StructuredLLMClient(...)`; update any type hints from `GovernanceClient` to `StructuredLLMClient`. |
+| `GovernanceClient` (alias) | [`src/governed_financial_advisor/infrastructure/governance_client.py:323`](../src/governed_financial_advisor/infrastructure/governance_client.py:323) | `StructuredLLMClient` (same module) | Replace `GovernanceClient(...)` with `StructuredLLMClient(...)`; update any type hints from `GovernanceClient` to `StructuredLLMClient`. See [`docs/examples/governed-financial-advisor/ARCHITECTURE.md`](examples/governed-financial-advisor/ARCHITECTURE.md) for Layer 4 reference application context. |
 | `RedisClient` (alias) | [`src/governed_financial_advisor/infrastructure/redis_client.py:268`](../src/governed_financial_advisor/infrastructure/redis_client.py:268) | `AsyncRedisClient` (same module) | Replace `RedisClient()` with `AsyncRedisClient()`. **Note:** do not confuse with the unrelated `_AsyncRedisClient`/`_SyncRedisClient` pair in [`src/gateway/infrastructure/redis_client.py`](../src/gateway/infrastructure/redis_client.py) — that module is untouched by this removal. |
 | `HybridClient` (alias) | ``src/governed_financial_advisor/infrastructure/llm_client.py:23`` | `GatewayClient` from [`src/gateway/core/llm.py`](../src/gateway/core/llm.py) | Replace `from src.governed_financial_advisor.infrastructure.llm_client import HybridClient` with `from src.gateway.core.llm import GatewayClient`. |
 | `check_safety_constraints` (tool alias) | [`src/governed_financial_advisor/agents/evaluator/agent.py:193`](../src/governed_financial_advisor/agents/evaluator/agent.py:193); [`src/gateway/server/mcp_tool_server.py:483`](../src/gateway/server/mcp_tool_server.py:483); [`src/governed_financial_advisor/tools/api.py:87-88`](../src/governed_financial_advisor/tools/api.py:87); [`src/governed_financial_advisor/graph/nodes/evaluator_node.py:22,147`](../src/governed_financial_advisor/graph/nodes/evaluator_node.py:22) | `simulate_governance_check` | Rename every reference to the tool/function name `check_safety_constraints` to `simulate_governance_check` across all 4 call sites (they must land in one atomic PR). |

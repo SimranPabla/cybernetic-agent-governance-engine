@@ -67,6 +67,8 @@ Full detail lives in [`CONTRIBUTING.md`](CONTRIBUTING.md#branch-naming-conventio
 | Documentation | `docs/<short-description>` | `docs/stpa-control-diagram` |
 | Refactor | `refactor/<short-description>` | `refactor/gateway-middleware` |
 | CI / tooling | `ci/<short-description>` | `ci/pin-actions-sha` |
+| Dependency/tooling update | `chore/<short-description>` | `chore/update-deps` |
+| Test addition | `test/<short-description>` | `test/cbf-chaos-suite` |
 | Hotfix on release | `hotfix/<version>-<description>` | `hotfix/2.0.1-redis-timeout` |
 | Release candidate | `rc-v<semver>` | `rc-v2.1.0` |
 | Experiment / spike | `spike/<short-description>` | `spike/cbf-formal-proof` |
@@ -136,7 +138,7 @@ Full detail lives in [`docs/operations/DEPLOYMENT_RULES.md`](docs/operations/DEP
   gcloud builds submit --config deployment/docker/cloudbuild.gateway.yaml
   ```
 - **Local/agnostic target**: `./deploy_all.sh --target agnostic --env dev`
-- Active IaC lives under `infra/`; `deployment/terraform/` is historical reference only.
+- `deployment/terraform/` was historical reference (directory has been removed from the repository); active IaC lives exclusively under `infra/`.
 
 ---
 
@@ -184,7 +186,7 @@ CAGE is an illustrative reference architecture. The optimization target is clean
 
 | Layer | Path | Role & Responsibilities | Invariants & Boundary Rules |
 |---|---|---|---|
-| **Layer 1: Kernel** | `src/gateway/` | **STERA Admissibility Engine**, core governance dispatch loop, standing assembly, consensus engine, CBF engine, evidence accumulator, routing, audit rails. | **Strictly domain-agnostic and vendor-neutral.** Must NEVER import from `src/cage_*` (Layer 2), `src/compliance_bridge/` (Layer 3), or `src/governed_financial_advisor/` (Layer 4). Must NOT import vendor SDKs (`google.cloud`, `boto3`, `azure`, `langfuse`). Enforced in CI by Gate G3 (`scripts/check_import_boundaries.py`). |
+| **Layer 1: Kernel** | `src/gateway/` | **STERA Admissibility Engine**, core governance dispatch loop, standing assembly, consensus engine, CBF engine, evidence accumulator, routing, audit rails. | **Strictly domain-agnostic and vendor-neutral.** Must NEVER import from `src/cage_*` (Layer 2), `src/compliance_bridge/` (Layer 3), or `src/governed_financial_advisor/` (Layer 4). Must NOT import vendor SDKs (`google.cloud`, `boto3`, `botocore`, `azure`, `langfuse`). Enforced in CI by Gate G3 (`scripts/check_import_boundaries.py`). **Note:** Gate G3 enforces these boundaries via allowlists for certain lazy, function-scoped imports. The `INTEGRATIONS_FACTORY_ALLOWLIST` permits runtime adapter loading from `src/integrations/` in factory modules (`execution_actuator.py`, `normative_provider.py`, `attestation_aggregator.py`, `evidence/factory.py`). The `COMPLIANCE_BRIDGE_FACTORY_ALLOWLIST` permits `oscal_ssp_exporter.py` to lazy-import `AssurancePosture` from `src/compliance_bridge/`. Vendor SDK restrictions (`FORBIDDEN_VENDOR_SDKS`) are currently enforced only within `src/gateway/governance/evidence/`. |
 | **Layer 2: Domain Plugins** | `src/cage_{domain}/` (e.g. `src/cage_finance/`, `src/cage_healthcare/`) | Domain-specific tiers (`GovernanceTierPlugin`), domain action registries, ontologies, policies, and causal graphs. | Provides immutable domain tiers to the kernel via `SymbolicGovernor(domain_tiers=...)`. Encapsulates domain vocabulary without polluting the kernel. |
 | **Layer 3: Integrations & Rails** | `src/integrations/`, `src/cage_finance/rails/`, `src/compliance_bridge/` | External vendor normative/attestation adapters, durable sinks (ClickHouse, GCS, S3), NeMo Guardrails, Langfuse telemetry. | Adheres to the Secure Plugin & Adapter Architecture Specification. Communicates via canonical dataclasses. |
 
@@ -278,6 +280,16 @@ Every collected test must carry at least one selection marker (`local`, `unit`, 
 
 ### Live GKE Cluster & Staging Runbooks
 > **Live Cluster Testing:** For staging port-forwarding, GKE tunnel concurrency rules, and POAM-024 validation, refer to [`docs/operations/GKE_TEST_RUNBOOK.md`](docs/operations/GKE_TEST_RUNBOOK.md).
+
+#### Live Cluster Testing Invariants (Fail-Closed)
+- **Never use `-n auto` on tunnels**: `pytest.ini` defaults to `-n auto` (spawning 16+ workers), which exhausts port-forward TCP pools and triggers false `503 Service Unavailable` / Redis connection drops. Constrain concurrency strictly to `-n 2 --dist loadscope` or `-n0`:
+  ```bash
+  uv run pytest tests/ -m integration --run-integration -n 2 --dist loadscope --no-cov -p no:langsmith -p no:langsmith_plugin --tb=short
+  ```
+- **Persistent Port-Forward Daemon**: Run tunnels via a detached daemon (`tmux new-session -d -s pf "bash scripts/port_forward_staging.sh --daemon"`). Verify reachability (`uv run python scripts/test_live_gke_services.py`) before executing test suites.
+- **Credential Synchronization**: Sync live cluster secrets (`kubectl get secret -n governance-stack <secret>`) into local `.env` (e.g. `REDIS_PASSWORD`, `LANGFUSE_COMPLIANCE_*`) prior to test runs. Never commit live cluster secrets to git.
+- **LLM / Agent Feedback Loop Latency**: End-to-end multi-agent governance benchmarks (`tests/test_agent_accuracy.py`) execute real GPU inference (vLLM DeepSeek-R1 / Qwen2.5) across multi-step cybernetic loops and require 6–8 minutes (`@pytest.mark.timeout(600)`). Monitor asynchronously; avoid aggressive polling loops.
+- **Partner Integration Isolation**: Third-party partner tests (`tests/integrations/provider_02/`) are tagged with `partner_integration` / `live_external`. They require external partner sandboxes (`PROVIDER_02_API_ENDPOINT`) and are excluded from standard internal GKE runs.
 
 ---
 

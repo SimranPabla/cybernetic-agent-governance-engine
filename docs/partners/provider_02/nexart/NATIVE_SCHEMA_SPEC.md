@@ -71,14 +71,14 @@ This document specifies the formal technical contract for **NexArt native suppor
 **CAGE Execution Model:**
 1. User request enters LangGraph-based governance workflow
 2. Each LangGraph node executes sequentially or in parallel
-3. Each node execution generates a [`ProjectBundleStepEntry`](../../src/integrations/provider_02/adapter.py:104)
+3. Each node execution generates a [`ProjectBundleStepEntry`](../../../src/integrations/provider_02/adapter.py:104)
 4. Node entries track parent/child relationships via `parentStepIds` array
-5. Complete execution bundle wrapped in [`AttestationBundle`](../../src/integrations/provider_02/adapter.py:135)
+5. Complete execution bundle wrapped in [`AttestationBundle`](../../../src/integrations/provider_02/adapter.py:135)
 6. Terminal path classification determines execution outcome (`happy_path`, `cbf_block`, `nemo_block`, `loop_breaker`, `unknown`)
 
 **NexArt Recording Contract:**
-- Ingest entire [`AttestationBundle`](../../src/integrations/provider_02/adapter.py:135) as atomic submission
-- Issue Certificate of Execution Record (CER) for each [`ProjectBundleStepEntry`](../../src/integrations/provider_02/adapter.py:104)
+- Ingest entire [`AttestationBundle`](../../../src/integrations/provider_02/adapter.py:135) as atomic submission
+- Issue Certificate of Execution Record (CER) for each [`ProjectBundleStepEntry`](../../../src/integrations/provider_02/adapter.py:104)
 - Preserve DAG topology via `parentStepIds` linkage
 - Store terminal path classification for filtering and auditing
 - Compute deterministic state hashes per RFC 8785 (JCS)
@@ -93,14 +93,14 @@ CAGE defines three foundational schemas for governance DAG recording:
 
 | Schema Name | Schema URI | Purpose | Source Definition |
 |-------------|-----------|---------|-------------------|
-| **AttestationBundle** | `urn:cage:governance:v1:attestation-bundle` | Complete governance bundle wrapping full DAG traversal | [`src/integrations/provider_02/adapter.py:135`](../../src/integrations/provider_02/adapter.py:135) |
-| **ProjectBundleStepEntry** | `urn:cage:governance:v1:step-entry` | Single DAG node execution snapshot with parent edges | [`src/integrations/provider_02/adapter.py:104`](../../src/integrations/provider_02/adapter.py:104) |
-| **GraphTopology** | `urn:cage:governance:v1:graph-topology` | Domain-agnostic graph structure definition | [`src/gateway/governance/seams/graph_topology.py:34`](../../src/gateway/governance/seams/graph_topology.py:34) |
+| **AttestationBundle** | `urn:cage:governance:v1:attestation-bundle` | Complete governance bundle wrapping full DAG traversal | [`src/integrations/provider_02/adapter.py:135`](../../../src/integrations/provider_02/adapter.py:135) |
+| **ProjectBundleStepEntry** | `urn:cage:governance:v1:step-entry` | Single DAG node execution snapshot with parent edges | [`src/integrations/provider_02/adapter.py:104`](../../../src/integrations/provider_02/adapter.py:104) |
+| **GraphTopology** | `urn:cage:governance:v1:graph-topology` | Domain-agnostic graph structure definition | [`src/gateway/governance/seams/graph_topology.py:34`](../../../src/gateway/governance/seams/graph_topology.py:34) |
 
 **JSON Schema Definitions:**
-- [`schemas/provider_02/attestation_bundle.schema.json`](../../schemas/provider_02/attestation_bundle.schema.json)
-- [`schemas/provider_02/project_bundle_step.schema.json`](../../schemas/provider_02/project_bundle_step.schema.json)
-- [`schemas/provider_02/graph_topology.schema.json`](../../schemas/provider_02/graph_topology.schema.json)
+- [`schemas/provider_02/attestation_bundle.schema.json`](../../../schemas/provider_02/attestation_bundle.schema.json)
+- [`schemas/provider_02/project_bundle_step.schema.json`](../../../schemas/provider_02/project_bundle_step.schema.json)
+- [`schemas/provider_02/graph_topology.schema.json`](../../../schemas/provider_02/graph_topology.schema.json)
 
 ### 2.2 AttestationBundle Schema
 
@@ -287,27 +287,37 @@ const canonical = canonicalize(data);
 ### 3.4 Hashing Invariants
 
 **Node-Level State Hash (`stateHash` field):**
-- Compute SHA-256 digest of JCS-canonicalized node state snapshot
-- State snapshot includes: `stepId`, `nodeName`, `timestampUtc`, `signals`, `metadata`
+
+The `stateHash` field is a **producer-supplied cryptographic commitment** over the private JCS-canonicalized (RFC 8785) `AgentState` snapshot at the time of node execution. This hash is computed by CAGE (the producer) and submitted as an opaque, unforgeable commitment within each [`ProjectBundleStepEntry`](../../../src/integrations/provider_02/adapter.py:104).
+
+**Critical Invariant:** `stateHash` is **NOT recomputed by NexArt**. NexArt records the `stateHash` value as-is, treating it as an unforgeable producer commitment. The state snapshot used to compute `stateHash` is private to CAGE and is never transmitted to NexArt.
+
+**Producer Computation (CAGE Responsibility):**
+- Compute SHA-256 digest of JCS-canonicalized `AgentState` snapshot
+- State snapshot includes: `stepId`, `nodeName`, `timestampUtc`, `signals`, `metadata`, plus private internal state fields not transmitted to NexArt
 - Exclude `parentStepIds` and `durationMs` from state hash (these are DAG metadata, not state)
 - **Format:** 64-character lowercase hexadecimal string
 
-**Example State Hash Computation:**
+**Example State Hash Computation (CAGE Internal):**
 ```python
 import jcs
 import hashlib
 
+# Private AgentState snapshot (not transmitted to NexArt)
 state = {
     "stepId": "c9bf9e57-1685-4c89-bafb-ff5af830be8a",
     "nodeName": "safety_check",
     "timestampUtc": "2026-09-14T12:00:00.500Z",
     "signals": {"opa_verdict": "ALLOW"},
     "metadata": {"policy": "OPA_PRE_TRADE_001"},
+    # Additional private fields (e.g., internal graph state, model weights)
+    # may be included in hash computation but NOT transmitted
 }
 
 canonical = jcs.canonicalize(state)
 state_hash = hashlib.sha256(canonical).hexdigest()
 # Result: "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8"
+# This hash is submitted to NexArt as an opaque commitment
 ```
 
 **Bundle-Level CER Digest (NexArt responsibility):**
@@ -319,22 +329,50 @@ state_hash = hashlib.sha256(canonical).hexdigest()
 
 **NexArt Ingestion Pipeline MUST:**
 1. Parse incoming `AttestationBundle` JSON
-2. Re-canonicalize each `ProjectBundleStepEntry.signals` and `.metadata` per RFC 8785
-3. Recompute `stateHash` and verify against submitted value
-4. Reject bundles with hash mismatches (fail-closed)
+2. **Record `stateHash` as an unforgeable producer commitment** (do NOT recompute or verify against any derived value)
+3. Re-canonicalize each `ProjectBundleStepEntry` (excluding `stateHash`) per RFC 8785 to produce deterministic CER digest inputs
+4. Verify the provider's cryptographic signature over the canonicalized `ProjectBundleStepEntry` payload
 5. Preserve original `signals`/`metadata` content after validation
 
 **CAGE Submission Pipeline MUST:**
-1. Apply JCS canonicalization to all extension point data before computing `stateHash`
-2. Never submit non-canonicalized JSON to NexArt
-3. Validate local hash computation matches NexArt's recomputed hash
+1. Apply JCS canonicalization to private `AgentState` snapshot before computing `stateHash`
+2. Submit `stateHash` as an opaque commitment (never transmit the private state snapshot to NexArt)
+3. Sign the canonicalized `ProjectBundleStepEntry` payload with CAGE's private key
+
+**Signature Verification (NexArt):**
+- Resolve CAGE's public key by `kid` from an independently-fetched key manifest (never trust an embedded key)
+- Verify the provider signature over the JCS-canonicalized `ProjectBundleStepEntry` payload
+- Fail closed on unknown `kid` or signature verification failure
+- Successful signature verification proves the step entry originated from CAGE and was not tampered with
 
 ---
 ## 4. DAG Topological Invariants
 
-### 4.1 Parent/Child Step ID Referencing Rules
+### 4.1 Parent/Child Step ID Referencing Rules & Ancestor Contraction
 
-**Core Invariant:** All `parentStepIds` in a [`ProjectBundleStepEntry`](../../src/integrations/provider_02/adapter.py:104) MUST reference steps that appear earlier in the `AttestationBundle.steps` array.
+**Core Invariant:** All `parentStepIds` in a [`ProjectBundleStepEntry`](../../../src/integrations/provider_02/adapter.py:104) MUST reference steps that appear earlier in the `AttestationBundle.steps` array.
+
+**DAG Ancestor Contraction Algorithm:**
+
+CAGE's governance workflow may execute intermediate nodes that are not explicitly recorded in the final `AttestationBundle.steps` array (e.g., transient refinement loops, internal checkpoints). When a recorded step has unrecorded intermediate ancestors, CAGE applies a **DAG ancestor contraction** algorithm to compute valid `parentStepIds` that reference only recorded steps.
+
+**Contraction Rules:**
+1. **Direct Recorded Parent:** If a step's immediate parent was recorded, reference it directly in `parentStepIds`.
+2. **Unrecorded Intermediate Parent:** If a step's immediate parent was NOT recorded, traverse backward through the execution DAG to find the nearest recorded ancestor(s).
+3. **Multiple Paths:** If multiple paths exist through unrecorded intermediates to different recorded ancestors, include ALL reachable recorded ancestors in `parentStepIds` (this produces multi-parent convergence).
+4. **Topological Ordering Preservation:** The contraction MUST preserve the original DAG's reachability properties: if node A could reach node B in the full execution graph, the contracted graph MUST preserve this reachability.
+
+**Example Contraction:**
+```
+Full Execution Graph (some nodes unrecorded):
+  [R1: nemo_check] → [U1: internal_state] → [U2: internal_refinement] → [R2: safety_check]
+                   ↘ [U3: parallel_branch] ↗
+
+Contracted Graph (only recorded nodes in AttestationBundle):
+  [R1: nemo_check] → [R2: safety_check]
+  
+  R2.parentStepIds = [R1.stepId]  # U1, U2, U3 contracted away
+```
 
 **Validation Algorithm:**
 ```python
@@ -362,6 +400,11 @@ def validate_parent_references(bundle: AttestationBundle) -> bool:
 **Leaf Node Convention:**
 - Leaf nodes have no children (no other step references them as parent)
 - Terminal path classification depends on which leaf node(s) were reached
+
+**NexArt Verification:**
+- NexArt MUST validate that all `parentStepIds` reference earlier steps in the `steps` array
+- NexArt does NOT need to know about unrecorded intermediate nodes (they are abstracted away by contraction)
+- The contracted DAG preserves all governance-relevant execution paths
 
 ### 4.2 Monotonic Non-Decreasing Timestamp Constraints
 
@@ -531,7 +574,7 @@ def classify_terminal_path(bundle: AttestationBundle, topology: GraphTopology) -
 
 CAGE provides **5 realistic test fixtures** representing diverse governance execution patterns. These fixtures validate NexArt's ingestion pipeline, CER issuance, and terminal path classification logic.
 
-**Fixture Location:** [`tests/fixtures/provider_02_native/`](../../tests/fixtures/provider_02_native/)
+**Fixture Location:** [`tests/fixtures/provider_02_native/`](../../../tests/fixtures/provider_02_native/)
 
 **Validation Status:** All 5 fixtures passed JSON schema validation on 2026-09-14T17:12:03Z
 
@@ -539,16 +582,16 @@ CAGE provides **5 realistic test fixtures** representing diverse governance exec
 
 | Fixture | Terminal Path | Nodes | Duration | Primary Verification Target |
 |---------|---------------|-------|----------|----------------------------|
-| [`01_single_path_happy.json`](../../tests/fixtures/provider_02_native/01_single_path_happy.json) | `happy_path` | 4 | 715ms | Basic schema compliance, linear DAG |
-| [`02_cbf_block.json`](../../tests/fixtures/provider_02_native/02_cbf_block.json) | `cbf_block` | 3 | 260ms | CBF safety barrier enforcement |
-| [`03_loop_breaker.json`](../../tests/fixtures/provider_02_native/03_loop_breaker.json) | `loop_breaker` | 6 | 915ms | Iteration limit handling |
-| [`04_nemo_policy_block.json`](../../tests/fixtures/provider_02_native/04_nemo_policy_block.json) | `nemo_block` | 3 | 380ms | Policy violation halt flow |
-| [`05_large_dag.json`](../../tests/fixtures/provider_02_native/05_large_dag.json) | `happy_path` | 22 | 2,160ms | Complex multi-branch topology |
+| [`01_single_path_happy.json`](../../../tests/fixtures/provider_02_native/01_single_path_happy.json) | `happy_path` | 4 | 715ms | Basic schema compliance, linear DAG |
+| [`02_cbf_block.json`](../../../tests/fixtures/provider_02_native/02_cbf_block.json) | `cbf_block` | 3 | 260ms | CBF safety barrier enforcement |
+| [`03_loop_breaker.json`](../../../tests/fixtures/provider_02_native/03_loop_breaker.json) | `loop_breaker` | 6 | 915ms | Iteration limit handling |
+| [`04_nemo_policy_block.json`](../../../tests/fixtures/provider_02_native/04_nemo_policy_block.json) | `nemo_block` | 3 | 380ms | Policy violation halt flow |
+| [`05_large_dag.json`](../../../tests/fixtures/provider_02_native/05_large_dag.json) | `happy_path` | 22 | 2,160ms | Complex multi-branch topology |
 
 ### 5.3 Detailed Fixture Specifications
 
 #### Fixture 01: Single-Path Happy Path
-**File:** [`01_single_path_happy.json`](../../tests/fixtures/provider_02_native/01_single_path_happy.json)  
+**File:** [`01_single_path_happy.json`](../../../tests/fixtures/provider_02_native/01_single_path_happy.json)  
 **Terminal Path:** `happy_path`  
 **DAG Structure:** Linear 4-node execution  
 **Nodes:** `input_validator` → `safety_check` → `governed_executor` → `report_generator`
@@ -568,7 +611,7 @@ CAGE provides **5 realistic test fixtures** representing diverse governance exec
 ---
 
 #### Fixture 02: CBF Block
-**File:** [`02_cbf_block.json`](../../tests/fixtures/provider_02_native/02_cbf_block.json)  
+**File:** [`02_cbf_block.json`](../../../tests/fixtures/provider_02_native/02_cbf_block.json)  
 **Terminal Path:** `cbf_block`  
 **DAG Structure:** 3-node execution terminating at CBF safety check  
 **Nodes:** `request_parser` → `cbf_velocity_check` (BLOCKED) → `termination_handler`
@@ -599,7 +642,7 @@ CAGE provides **5 realistic test fixtures** representing diverse governance exec
 ---
 
 #### Fixture 03: Loop Breaker
-**File:** [`03_loop_breaker.json`](../../tests/fixtures/provider_02_native/03_loop_breaker.json)  
+**File:** [`03_loop_breaker.json`](../../../tests/fixtures/provider_02_native/03_loop_breaker.json)  
 **Terminal Path:** `loop_breaker`  
 **DAG Structure:** 6-node execution with query planner ↔ executor refinement loops  
 **Iteration Count:** 5 (max limit reached)
@@ -630,7 +673,7 @@ CAGE provides **5 realistic test fixtures** representing diverse governance exec
 ---
 
 #### Fixture 04: NeMo Policy Block
-**File:** [`04_nemo_policy_block.json`](../../tests/fixtures/provider_02_native/04_nemo_policy_block.json)  
+**File:** [`04_nemo_policy_block.json`](../../../tests/fixtures/provider_02_native/04_nemo_policy_block.json)  
 **Terminal Path:** `nemo_block`  
 **DAG Structure:** 3-node execution terminating at NeMo Guardrails policy violation  
 **Nodes:** `request_intake` → `nemo_guardrails_check` (BLOCKED) → `policy_enforcement`
@@ -660,7 +703,7 @@ CAGE provides **5 realistic test fixtures** representing diverse governance exec
 ---
 
 #### Fixture 05: Large DAG
-**File:** [`05_large_dag.json`](../../tests/fixtures/provider_02_native/05_large_dag.json)  
+**File:** [`05_large_dag.json`](../../../tests/fixtures/provider_02_native/05_large_dag.json)  
 **Terminal Path:** `happy_path`  
 **DAG Structure:** Complex 22-node workflow with parallel branches and convergence  
 **Topology:** Ingestion → routing → 3 parallel branches → convergence → finalization
@@ -735,9 +778,9 @@ uv run python tests/test_provider_02_native_fixtures.py
   - `urn:cage:governance:v1:graph-topology`
 
 - [ ] **Upload JSON Schema Definitions:**
-  - [`attestation_bundle.schema.json`](../../schemas/provider_02/attestation_bundle.schema.json)
-  - [`project_bundle_step.schema.json`](../../schemas/provider_02/project_bundle_step.schema.json)
-  - [`graph_topology.schema.json`](../../schemas/provider_02/graph_topology.schema.json)
+  - [`attestation_bundle.schema.json`](../../../schemas/provider_02/attestation_bundle.schema.json)
+  - [`project_bundle_step.schema.json`](../../../schemas/provider_02/project_bundle_step.schema.json)
+  - [`graph_topology.schema.json`](../../../schemas/provider_02/graph_topology.schema.json)
 
 - [ ] **Configure Validation Rules:**
   - Enable strict JSON Schema validation on ingestion
@@ -755,7 +798,7 @@ uv run python tests/test_provider_02_native_fixtures.py
 
 ### 6.2 Ingestion Parser Configuration
 
-**Objective:** Implement native parser for [`AttestationBundle`](../../src/integrations/provider_02/adapter.py:135) ingestion.
+**Objective:** Implement native parser for [`AttestationBundle`](../../../src/integrations/provider_02/adapter.py:135) ingestion.
 
 **Parser Requirements:**
 
@@ -921,7 +964,7 @@ Content-Type: application/json
 
 **Test Environment:**
 - **NexArt Staging URL:** (TBD — provided by Jeremy)
-- **CAGE Test Harness:** [`tests/test_provider_02_adapter.py`](../../tests/test_provider_02_adapter.py)
+- **CAGE Test Harness:** [`tests/test_provider_02_adapter.py`](../../../tests/test_provider_02_adapter.py)
 - **Integration Marker:** `@pytest.mark.integration` (manual trigger, not CI)
 
 **Success Criteria:**
@@ -1023,25 +1066,25 @@ Content-Type: application/json
 ## 8. References
 
 **CAGE Schema Definitions:**
-- [`schemas/provider_02/README.md`](../../schemas/provider_02/README.md)
-- [`schemas/provider_02/attestation_bundle.schema.json`](../../schemas/provider_02/attestation_bundle.schema.json)
-- [`schemas/provider_02/project_bundle_step.schema.json`](../../schemas/provider_02/project_bundle_step.schema.json)
-- [`schemas/provider_02/graph_topology.schema.json`](../../schemas/provider_02/graph_topology.schema.json)
+- [`schemas/provider_02/README.md`](../../../schemas/provider_02/README.md)
+- [`schemas/provider_02/attestation_bundle.schema.json`](../../../schemas/provider_02/attestation_bundle.schema.json)
+- [`schemas/provider_02/project_bundle_step.schema.json`](../../../schemas/provider_02/project_bundle_step.schema.json)
+- [`schemas/provider_02/graph_topology.schema.json`](../../../schemas/provider_02/graph_topology.schema.json)
 
 **Implementation Plan:**
-- [`plans/provider_02_native_schema_handoff.md`](../../plans/provider_02_native_schema_handoff.md)
+- [`plans/provider_02_native_schema_handoff.md`](../../../plans/provider_02_native_schema_handoff.md)
 
 **Test Fixtures:**
-- [`tests/fixtures/provider_02_native/README.md`](../../tests/fixtures/provider_02_native/README.md)
-- [`tests/fixtures/provider_02_native/01_single_path_happy.json`](../../tests/fixtures/provider_02_native/01_single_path_happy.json)
-- [`tests/fixtures/provider_02_native/02_cbf_block.json`](../../tests/fixtures/provider_02_native/02_cbf_block.json)
-- [`tests/fixtures/provider_02_native/03_loop_breaker.json`](../../tests/fixtures/provider_02_native/03_loop_breaker.json)
-- [`tests/fixtures/provider_02_native/04_nemo_policy_block.json`](../../tests/fixtures/provider_02_native/04_nemo_policy_block.json)
-- [`tests/fixtures/provider_02_native/05_large_dag.json`](../../tests/fixtures/provider_02_native/05_large_dag.json)
+- [`tests/fixtures/provider_02_native/README.md`](../../../tests/fixtures/provider_02_native/README.md)
+- [`tests/fixtures/provider_02_native/01_single_path_happy.json`](../../../tests/fixtures/provider_02_native/01_single_path_happy.json)
+- [`tests/fixtures/provider_02_native/02_cbf_block.json`](../../../tests/fixtures/provider_02_native/02_cbf_block.json)
+- [`tests/fixtures/provider_02_native/03_loop_breaker.json`](../../../tests/fixtures/provider_02_native/03_loop_breaker.json)
+- [`tests/fixtures/provider_02_native/04_nemo_policy_block.json`](../../../tests/fixtures/provider_02_native/04_nemo_policy_block.json)
+- [`tests/fixtures/provider_02_native/05_large_dag.json`](../../../tests/fixtures/provider_02_native/05_large_dag.json)
 
 **Source Code:**
-- [`src/integrations/provider_02/adapter.py`](../../src/integrations/provider_02/adapter.py) — Python dataclass definitions
-- [`src/gateway/governance/seams/graph_topology.py`](../../src/gateway/governance/seams/graph_topology.py) — Graph topology seam
+- [`src/integrations/provider_02/adapter.py`](../../../src/integrations/provider_02/adapter.py) — Python dataclass definitions
+- [`src/gateway/governance/seams/graph_topology.py`](../../../src/gateway/governance/seams/graph_topology.py) — Graph topology seam
 
 **Standards:**
 - RFC 8785 (JSON Canonicalization Scheme): https://www.rfc-editor.org/rfc/rfc8785.html

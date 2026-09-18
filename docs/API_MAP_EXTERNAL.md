@@ -303,7 +303,7 @@ Generate an on-demand CSA AARM Conformance Report Card (11 threat vectors).
 
 Defined in [`server.py`](../src/governed_financial_advisor/server.py). Port from
 `Config.PORT`. Lifespan initializes the LangGraph agent graph and Redis
-checkpointer.
+checkpointer. See [`docs/examples/governed-financial-advisor/ARCHITECTURE.md`](examples/governed-financial-advisor/ARCHITECTURE.md) for the complete Layer 4 reference application architecture.
 
 ### 3.1 Core Endpoints — [`server.py`](../src/governed_financial_advisor/server.py)
 
@@ -523,7 +523,7 @@ In dev may apply directly.
 
 ---
 
-## 4. gRPC Gateway Service — [`gateway.proto`](../src/agentsight-ui/gateway_protos/gateway.proto)
+## 4. gRPC Gateway Service — [`gateway.proto`](../src/gateway/protos/gateway.proto)
 
 **Package:** `gateway` · **Service:** `Gateway`
 
@@ -813,7 +813,7 @@ breach thresholds.
 
 ---
 
-### 3.2 Tools Router — [`tools/api.py`](../src/governed_financial_advisor/tools/api.py)
+### 3.2 Tools Router — [`src/governed_financial_advisor/tools/api.py`](../src/governed_financial_advisor/tools/api.py)
 
 Mounted at `/tools`. All endpoints require `X-API-Key` header.
 
@@ -976,7 +976,7 @@ Every 200 response **must** include a top-level `decision`. The vocabulary is
 
 **`REVIEW` is not valid on this endpoint.** `PASS`/`REVIEW`/`BLOCKED` is
 `provider_06`'s vocabulary
-([`provider_06/adapter.py`](../src/integrations/provider_06/adapter.py:87)).
+([`src/integrations/provider_06/adapter.py`](../src/integrations/provider_06/adapter.py:87)).
 Map an upstream `REVIEW` to `ESCALATE` — both reach the `DeferQueue`.
 
 **Request example (`ALLOW`):**

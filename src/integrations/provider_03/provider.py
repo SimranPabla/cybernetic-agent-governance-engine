@@ -41,7 +41,7 @@ import hashlib
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, Final
 from urllib.parse import quote
 
 from src.gateway.governance.jcs_canonicalizer import jcs_canonicalize_plan
@@ -60,7 +60,9 @@ _TIMEOUT_SECONDS: float = float(
 )
 
 # Finding code for endpoint errors (consistent with provider_01 and provider_06)
-FINDING_CODE_ENDPOINT_ERROR = "ENDPOINT_ERROR"
+FINDING_CODE_ENDPOINT_ERROR: Final[str] = "ENDPOINT_ERROR"
+FINDING_CODE_MAPPING_COLLISION: Final[str] = "MAPPING_COLLISION"
+FINDING_CODE_PARSE_ERROR: Final[str] = "PARSE_ERROR"
 
 
 class Provider03NormativeProvider:
@@ -187,6 +189,36 @@ class Provider03NormativeProvider:
             # (e.g., finance domain maps 'amount' → 'magnitude', 'symbol' → 'context')
             action_context = payload.get("action_context")
             if self._field_map and isinstance(action_context, dict):
+                # VERITAS / CAGE Phase 4 Invariant I-07: Action Context Collision Guard
+                # Fail closed if both legacy and canonical keys are present
+                for src_key, dest_key in self._field_map.items():
+                    if (
+                        src_key != dest_key
+                        and src_key in action_context
+                        and dest_key in action_context
+                    ):
+                        logger.error(
+                            "[Provider03] Action context collision detected: "
+                            "legacy key '%s' and canonical key '%s' both present",
+                            src_key,
+                            dest_key,
+                        )
+                        return ValidationResult(
+                            admitted=False,
+                            error=f"Action context collision: both '{src_key}' and '{dest_key}' present",
+                            findings=[
+                                {
+                                    "code": FINDING_CODE_MAPPING_COLLISION,
+                                    "severity": "blocked",
+                                    "message": f"Action context collision: legacy key '{src_key}' and canonical key '{dest_key}' are both present",
+                                    "source_key": src_key,
+                                    "destination_key": dest_key,
+                                }
+                            ],
+                        )
+
+                # No collision detected — proceed with field normalization
+                # Use defensive copy to preserve original payload
                 normalized_context = dict(action_context)
                 for src_key, dest_key in self._field_map.items():
                     if src_key in normalized_context:
@@ -200,11 +232,51 @@ class Provider03NormativeProvider:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 resp = await client.post(url, json=payload, headers=self._headers())
                 resp.raise_for_status()
-                data = resp.json()
+                
+                # Fail-closed JSON parsing
+                try:
+                    data = resp.json()
+                except (json.JSONDecodeError, ValueError) as exc:
+                    logger.error(
+                        "[Provider03] validate_fria JSON parse error: %s %s",
+                        url,
+                        exc,
+                    )
+                    return ValidationResult(
+                        admitted=False,
+                        error=f"Malformed JSON response: {exc}",
+                        findings=[
+                            {
+                                "code": FINDING_CODE_PARSE_ERROR,
+                                "severity": "blocked",
+                                "message": f"Provider 03 response could not be decoded as JSON: {exc}",
+                            }
+                        ],
+                    )
+                
+                # Enforce response schema structure
+                if not isinstance(data, dict):
+                    logger.error(
+                        "[Provider03] validate_fria invalid schema: expected dict, got %s",
+                        type(data).__name__,
+                    )
+                    return ValidationResult(
+                        admitted=False,
+                        error=f"Invalid response schema: expected JSON object, got {type(data).__name__}",
+                        findings=[
+                            {
+                                "code": FINDING_CODE_PARSE_ERROR,
+                                "severity": "blocked",
+                                "message": f"Provider 03 response is not a valid JSON object: {type(data).__name__}",
+                            }
+                        ],
+                    )
 
-            # Map Provider 03's verdict to CAGE semantics
-            verdict = data.get("verdict", "").upper()
-            findings = data.get("findings", [])
+            # Defensive field extraction
+            raw_verdict = data.get("verdict")
+            verdict = str(raw_verdict).upper() if raw_verdict is not None else ""
+            raw_findings = data.get("findings")
+            findings = raw_findings if isinstance(raw_findings, list) else []
 
             if verdict == "APPROVED":
                 return ValidationResult(
@@ -267,6 +339,19 @@ class Provider03NormativeProvider:
                     }
                 ],
             )
+        except Exception as exc:
+            logger.error("[Provider03] validate_fria unexpected error: %s %s", url, exc)
+            return ValidationResult(
+                admitted=False,
+                error=str(exc),
+                findings=[
+                    {
+                        "code": FINDING_CODE_ENDPOINT_ERROR,
+                        "severity": "blocked",
+                        "message": f"Provider 03 unexpected error: {exc}",
+                    }
+                ],
+            )
 
     async def submit_evidence(self, thread_id: str, evidence_hash: str):  # type: ignore[no-untyped-def]
         """Submit post-execution attestation evidence to Provider 03.
@@ -291,7 +376,32 @@ class Provider03NormativeProvider:
                     headers=self._headers(),
                 )
                 resp.raise_for_status()
-                data = resp.json()
+                
+                # Fail-closed JSON parsing
+                try:
+                    data = resp.json()
+                except (json.JSONDecodeError, ValueError) as exc:
+                    logger.error(
+                        "[Provider03] submit_evidence JSON parse error: %s %s",
+                        url,
+                        exc,
+                    )
+                    return EvidenceSeal(
+                        thread_id=thread_id,
+                        error=f"Invalid JSON response: {exc}",
+                    )
+                
+                # Verify response is a dict
+                if not isinstance(data, dict):
+                    logger.error(
+                        "[Provider03] submit_evidence invalid schema: expected dict, got %s",
+                        type(data).__name__,
+                    )
+                    return EvidenceSeal(
+                        thread_id=thread_id,
+                        error=f"Invalid response format: expected JSON object, got {type(data).__name__}",
+                    )
+                
                 return EvidenceSeal(
                     thread_id=thread_id,
                     seal_hash=data.get("seal_hash", data.get("receipt_hash", "")),
@@ -308,6 +418,9 @@ class Provider03NormativeProvider:
             )
         except httpx.RequestError as exc:
             logger.error("[Provider03] submit_evidence request error: %s %s", url, exc)
+            return EvidenceSeal(thread_id=thread_id, error=str(exc))
+        except Exception as exc:
+            logger.error("[Provider03] submit_evidence unexpected error: %s %s", url, exc)
             return EvidenceSeal(thread_id=thread_id, error=str(exc))
 
     def ingest_bind_receipt(self, receipt: dict[str, Any]) -> str:

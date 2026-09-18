@@ -291,13 +291,17 @@ class TestCallbackHandler:
         cb.on_chain_start("evaluator", state)
         cb.on_chain_end("evaluator", _approved_state())
 
-        # evaluator's parent should be execution_analyst's step_id
+        # evaluator's parent contracts upstream through non-attestation nodes to nemo_guardrail
         evaluator_step = [s for s in cb._steps if s.node_name == "evaluator"][0]
-        execution_analyst_id = cb._step_id_by_node["execution_analyst"]
-        assert execution_analyst_id in evaluator_step.parent_step_ids
+        nemo_guardrail_id = cb._step_id_by_node["nemo_guardrail"]
+        assert nemo_guardrail_id in evaluator_step.parent_step_ids
 
     def test_hitl_interrupt_recorded(self):  # type: ignore[no-untyped-def]
-        """HITL interrupt produces a step with approval signals."""
+        """HITL interrupt produces a step with approval signals, 64-char hex state_hash,
+        and correct causal chain: safety_check -> hitl_interrupt -> governed_trader.
+        """
+        import re
+        
         cb = Provider02AttestationCallback(
             topology=FINANCIAL_ADVISOR_TOPOLOGY, thread_id="test-thread"
         )
@@ -315,13 +319,42 @@ class TestCallbackHandler:
             cb.on_chain_start(node, state)
             cb.on_chain_end(node, state)
 
+        # Capture safety_check step_id
+        safety_check_step = next(s for s in cb._steps if s.node_name == "safety_check")
+        safety_check_step_id = safety_check_step.step_id
+
         # Record HITL interrupt
-        cb.handle_hitl_interrupt(_hitl_state())
+        hitl_state = _hitl_state()
+        cb.handle_hitl_interrupt(hitl_state)
 
         hitl_steps = [s for s in cb._steps if s.node_name == "hitl_interrupt"]
         assert len(hitl_steps) == 1
-        assert hitl_steps[0].signals["hitlApproval"]["approved"] is True
-        assert hitl_steps[0].signals["interruptType"] == "HITL_MANUAL_REVIEW"
+        hitl_step = hitl_steps[0]
+        
+        assert hitl_step.signals["hitlApproval"]["approved"] is True
+        assert hitl_step.signals["interruptType"] == "HITL_MANUAL_REVIEW"
+        
+        # Confirm state_hash is non-empty and matches 64 lowercase hex characters
+        assert hitl_step.state_hash, "state_hash must be non-empty"
+        assert re.match(r"^[a-f0-9]{64}$", hitl_step.state_hash), (
+            f"state_hash must be 64 lowercase hex chars, got {hitl_step.state_hash!r}"
+        )
+        
+        # Confirm causal chain: safety_check -> hitl_interrupt
+        assert hitl_step.parent_step_ids == [safety_check_step_id], (
+            f"hitl_interrupt must link to safety_check, "
+            f"expected [{safety_check_step_id}], got {hitl_step.parent_step_ids}"
+        )
+        
+        # Simulate resumption: governed_trader should link to hitl_interrupt
+        cb.on_chain_start("governed_trader", hitl_state)
+        cb.on_chain_end("governed_trader", hitl_state)
+        
+        governed_trader_step = next(s for s in cb._steps if s.node_name == "governed_trader")
+        assert governed_trader_step.parent_step_ids == [hitl_step.step_id], (
+            f"governed_trader must link to hitl_interrupt, "
+            f"expected [{hitl_step.step_id}], got {governed_trader_step.parent_step_ids}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -363,8 +396,12 @@ class TestLoopUnrolling:
         evaluator_steps = [s for s in cb._steps if s.node_name == "evaluator"]
         assert len(evaluator_steps) == 3
 
-        # Each evaluator step should have a parent from execution_analyst
-        for step in evaluator_steps:
+        # Root evaluator step in isolated loop test has no prior recorded ancestor
+        assert evaluator_steps[0].parent_step_ids == []
+        # Subsequent iterations link sequentially to previous evaluator iteration
+        assert evaluator_steps[1].parent_step_ids == [evaluator_steps[0].step_id]
+        assert evaluator_steps[2].parent_step_ids == [evaluator_steps[1].step_id]
+        for step in evaluator_steps[1:]:
             assert len(step.parent_step_ids) >= 1
 
     def test_loop_breaker_at_count_3(self):  # type: ignore[no-untyped-def]

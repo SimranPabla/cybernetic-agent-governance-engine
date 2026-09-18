@@ -1,6 +1,7 @@
 # CAGE Examples
 
 > **Framing note:** CAGE is a **domain-agnostic** governance substrate. Every enforcement layer exercised by the demos below is domain-neutral — it operates on abstract action primitives. The scenarios use concrete nouns from the **finance example domain** ([`src/cage_finance/`](../src/cage_finance/)) purely because a concrete trace is easier to read than an abstract one. The **healthcare example domain** ([`src/cage_healthcare/`](../src/cage_healthcare/)) is of equal standing and drives the identical tiers with `dose_order`, `SerumConcentrationBarrier`, and clinical critics substituted in. Neither domain is required: `CAGE_ACTIVE_PLUGINS=""` runs the bare substrate. See [`docs/architecture/DOMAIN_PLUGIN_ARCHITECTURE.md`](../docs/architecture/DOMAIN_PLUGIN_ARCHITECTURE.md).
+> **Framing note:** CAGE is a **domain-agnostic** governance substrate. Every enforcement layer exercised by the demos below is domain-neutral — it operates on abstract action primitives. The scenarios use concrete nouns from the **finance example domain** ([`src/cage_finance/`](../src/cage_finance/)) purely because a concrete trace is easier to read than an abstract one. The **healthcare example domain** ([`src/cage_healthcare/`](../src/cage_healthcare/)) is of equal standing and drives the identical tiers with `dose_order`, `SerumConcentrationBarrier`, and clinical critics substituted in. Neither domain is required: `CAGE_ACTIVE_PLUGINS=""` runs the bare substrate. See [`docs/architecture/EXTENSIBILITY_ARCHITECTURE.md`](../docs/architecture/EXTENSIBILITY_ARCHITECTURE.md).
 >
 > Reading the tables below: the **Layer / Mechanism** columns are kernel-owned and domain-independent; the scenario narratives are domain-flavoured illustrations.
 
@@ -22,7 +23,7 @@ Runs three adversarial attack scenarios through the **real** CAGE governance pip
 | 1 | Agentic Confidence Threshold | SR 26-2 §IV.B check against `governance_thresholds.json` |
 | 2 | OPA Rego Emulator | Mirrors `config/opa/generated_stpa_policy.rego` logic inline |
 | 3 | Prompt Injection Scanner | Tier-1 keywords from `governance_thresholds.json` |
-| 4 | Cilium L7 Egress | Emulates `deployment/k8s/cilium-egress-lockdown.yaml` FQDN rules |
+| 4 | Cilium L7 Egress | Emulates `deployment/k8s/cilium/egress-lockdown.yaml` FQDN rules |
 
 ## Quick Start
 
@@ -105,7 +106,7 @@ uv run python -m src.gateway.governance.stpa_compiler compile
 
 # Deploy to governance-stack
 kubectl apply -f deployment/k8s/linkerd-mtls-policy.yaml
-kubectl apply -f deployment/k8s/cilium-egress-lockdown.yaml
+kubectl apply -f deployment/k8s/cilium/egress-lockdown.yaml
 
 # Verify governance edges
 linkerd viz authz deployment/opa-service -n governance-stack
